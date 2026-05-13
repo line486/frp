@@ -1,0 +1,171 @@
+name: Build Debian Packages
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.60.0) to upload deb packages to'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  build-web:
+    name: Build web assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build web assets (frps)
+        run: make build
+        working-directory: web/frps
+
+      - name: Build web assets (frpc)
+        run: make build
+        working-directory: web/frpc
+
+      - name: Upload web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: |
+            web/frps/dist
+            web/frpc/dist
+
+  build-deb:
+    name: Build deb (${{ matrix.debarch }})
+    needs: build-web
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            debarch: amd64
+          - goarch: arm64
+            debarch: arm64
+          - goarch: arm
+            goarm: "7"
+            debarch: armhf
+          - goarch: "386"
+            debarch: i386
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+
+      - name: Download web assets
+        uses: actions/download-artifact@v4
+        with:
+          name: web-assets
+          path: web
+
+      - name: Get version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+          elif [ -n "${{ github.event.inputs.tag }}" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+            VERSION="${TAG#v}"
+          else
+            VERSION="0.0.0~dev"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG:-}" >> "$GITHUB_OUTPUT"
+
+      - name: Cross-compile frps and frpc
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          LDFLAGS="-s -w"
+          go build -trimpath -ldflags "$LDFLAGS" -tags frps -o frps ./cmd/frps
+          go build -trimpath -ldflags "$LDFLAGS" -tags frpc -o frpc ./cmd/frpc
+
+      - name: Build deb packages
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          DEBARCH="${{ matrix.debarch }}"
+
+          # --- frpc package ---
+          PKG="frpc_${VERSION}_${DEBARCH}"
+          mkdir -p "${PKG}/DEBIAN" "${PKG}/usr/bin" "${PKG}/etc/frp" "${PKG}/usr/share/doc/frpc"
+          cp frpc "${PKG}/usr/bin/frpc"
+          chmod 755 "${PKG}/usr/bin/frpc"
+          cp conf/frpc.toml "${PKG}/etc/frp/frpc.toml"
+          cp LICENSE "${PKG}/usr/share/doc/frpc/"
+          cat > "${PKG}/DEBIAN/control" <<EOF
+          Package: frpc
+          Version: ${VERSION}
+          Section: net
+          Priority: optional
+          Architecture: ${DEBARCH}
+          Maintainer: fatedier <fatedier@gmail.com>
+          Description: Client of frp, a fast reverse proxy.
+           frpc is the client side of frp, a fast reverse proxy that allows
+           you to expose a local server behind a NAT or firewall to the internet.
+          Homepage: https://github.com/fatedier/frp
+          EOF
+          cat > "${PKG}/DEBIAN/conffiles" <<EOF
+          /etc/frp/frpc.toml
+          EOF
+          dpkg-deb --build "${PKG}"
+
+          # --- frps package ---
+          PKG="frps_${VERSION}_${DEBARCH}"
+          mkdir -p "${PKG}/DEBIAN" "${PKG}/usr/bin" "${PKG}/etc/frp" "${PKG}/usr/share/doc/frps"
+          cp frps "${PKG}/usr/bin/frps"
+          chmod 755 "${PKG}/usr/bin/frps"
+          cp conf/frps.toml "${PKG}/etc/frp/frps.toml"
+          cp LICENSE "${PKG}/usr/share/doc/frps/"
+          cat > "${PKG}/DEBIAN/control" <<EOF
+          Package: frps
+          Version: ${VERSION}
+          Section: net
+          Priority: optional
+          Architecture: ${DEBARCH}
+          Maintainer: fatedier <fatedier@gmail.com>
+          Description: Server of frp, a fast reverse proxy.
+           frps is the server side of frp, a fast reverse proxy that allows
+           you to expose a local server behind a NAT or firewall to the internet.
+          Homepage: https://github.com/fatedier/frp
+          EOF
+          cat > "${PKG}/DEBIAN/conffiles" <<EOF
+          /etc/frp/frps.toml
+          EOF
+          dpkg-deb --build "${PKG}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frp_${{ steps.version.outputs.version }}_${{ matrix.debarch }}
+          path: "*.deb"
+
+      - name: Upload to release
+        if: github.event_name == 'release' || github.event.inputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          files: "*.deb"
