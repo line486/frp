@@ -63,14 +63,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout upstream
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 1
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -80,7 +80,7 @@ jobs:
           make -C web/frpc build
 
       - name: Upload web assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-assets
           path: |
@@ -107,19 +107,19 @@ jobs:
 
     steps:
       - name: Checkout upstream
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.UPSTREAM_REPO }}
           ref: ${{ needs.resolve.outputs.tag }}
           fetch-depth: 1
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: '1.25'
 
       - name: Download web assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-assets
           path: web
@@ -240,7 +240,7 @@ jobs:
           dpkg-deb --build "${PKG}"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: debs-${{ needs.resolve.outputs.version }}-${{ matrix.debarch }}
           path: '*.deb'
@@ -253,12 +253,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
 
       - name: Download all debs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: debs-${{ needs.resolve.outputs.version }}-*
           merge-multiple: true
@@ -272,7 +272,7 @@ jobs:
           echo "Downloaded source: $(du -h "frp-${TAG}-source.tar.gz" | cut -f1)"
 
       - name: Create / update release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           name: ${{ needs.resolve.outputs.tag }}
